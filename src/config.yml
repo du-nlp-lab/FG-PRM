@@ -1,0 +1,60 @@
+### For math tasks like prm800k ###
+
+# generation
+dataset: math500
+dataset_root: ../data/MATH/
+sample_data: MATH500.jsonl
+generation_file: generations_verify_{model}.json
+verification_result_file: verification_result_{model}.json
+num_of_runs_per_question: 256
+scaling_num_of_runs: 1
+evaluation_sample_file: evaluate_{hallucination}_sample_{number}.json
+sample_size: 100
+
+# synthetic data
+hallucination_type: consistency
+correct_file: sample_trainRM_3000.jsonl
+synthetic_file: synthetic_{hallucination}_{model}.json
+
+# evaluation
+evaluation_root: ../results/
+evaluation_intermediate_file: evaluate_{dataset}_{hallucination}_{model}_inter.json
+evaluation_result_file: evaluate_{dataset}_{hallucination}_{model}_results.json
+evaluation_all_results_file: evaluate_{dataset}_{model}_results.json
+evaluation_model: prm_model # claude # gpt-3.5 # 
+evaluation_method: sc # orm # prm # fg-prm #
+evaluation_batch_id_file: batch_id_{dataset}_{model}_{hallucination}.txt
+evaluation_batch_input_file: batch_input_{dataset}_{model}_{hallucination}.jsonl
+evaluation_batch_output_file: batch_output_{dataset}_{model}_{hallucination}.jsonl
+evaluation_llm_intermediate_file: evaluate_llm_{dataset}_{model}{method}_inter.json
+evaluation_llm_result_file: evaluate_llm_{dataset}_{hallucination}_{model}{method}_results.json
+
+# models
+gpt-3.5: gpt-3.5-turbo-0125
+gpt-4: gpt-4-turbo-2024-04-09
+gpt-4o: gpt-4o-2024-08-06
+o1-mini: o1-mini-2024-09-12
+llama2: llama-2-7b-chat
+llama3: llama-3-8b-instruct
+llama3-70b: llama-3-70b-instruct
+t5: t5-large
+claude: claude-haiku-20240307
+prm_model: longformer-4096_gsm8k
+
+max_input_length: 645
+max_output_length: 1700
+
+# only for openai batch
+batch_id_file: batch_id.txt
+batch_input_file: batch_input_{model}.jsonl
+batch_output_file: batch_output_{model}.jsonl
+
+# only for t5 fine-tuning
+pretrained_model: /data/models/huggingface-format/{model}
+tuned_model: ../models/{model}-{dataset}/tuned-{model}
+checkpoints: ../models/{model}-{dataset}/checkpoints
+logging: ../models/{model}-{dataset}/logging
+tune_file_root: ../data/prm800k_sample/
+train_file: sample_train.jsonl
+eval_file: sample_test.jsonl
+

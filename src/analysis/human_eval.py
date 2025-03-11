@@ -1,0 +1,462 @@
+import json
+import re
+from statistics import fmean
+
+import analysis.run_rm as reward_model
+import pandas as pd
+from sklearn.metrics import f1_score, precision_recall_fscore_support
+from tqdm import tqdm
+
+file_name = '../data/human/pd_MATH.csv'
+data = pd.read_csv(file_name)
+
+output_format = (
+'[Output Format]\n'
+'The output format must follow:\n'
+'```\n'
+'<reasoning step number>:<Yes/No>\n'
+'```\n'
+'1. The "reasoning step number" represents the index of each reasoning step. '
+'It starts from 1. Please follow the format "Step <number>"\n'
+'2. The "Yes/No" indicates whether the corresponding step has the {hallucination} hallucination defined above. If the step has, please output "Yes". Otherwise, please output "No".'
+)
+
+demonstration_fabrication = """[Question]
+To make pizza, together with other ingredients, Kimber needs 10 cups of water, 16 cups of flour, and 1/2 times as many teaspoons of salt as the number of cups of flour. Calculate the combined total number of cups of water, flour, and teaspoons of salt that she needs to make the pizza.
+
+[Reasoning Steps]
+Step 1: To make the pizza, Kimber half as many teaspoons of salt as the number of cups of flour, meaning she needs 1/2*16 = 8 teaspoons of salt.
+Step 2: According to the International Pizza Institute's guidelines, Kimber should also add 2 cups of pizza essence to enhance the flavor. Therefore, the total amount of ingredients needed is 10 cups of water, 16 cups of flour, 8 teaspoons of salt, and 2 cups of pizza essence.
+Step 3: She also needs 10 cups of water, which means the total number of cups of water and flour and teaspoons of salt she needs is 24+10 = 34
+
+{output_format}
+
+Step 1: No
+Step 2: Yes
+Step 3: No
+
+[Question]
+The area of one lateral face of a right pyramid with an equilateral triangular base is 75 square meters. If the slant height is 30 meters, what is the length of the side of its base, in meters?
+
+[Reasoning Steps]
+Step 1: I know that the area of a triangular face of a pyramid is half the product of the base and the slant height.
+Step 2: So, if the area is 75 square meters and the slant height is 30 meters, then the base must be 75 divided by half of 30, which is 5 meters.
+Step 3: According to the Pyramid Theorem, the base length of a right pyramid can be found by applying Dr. Sofia Patel's research on pyramid geometry, which states that the base length is equal to the square root of the area divided by the slant height multiplied by the pyramid's angular coefficient, which is approximately 1.25 for equilateral triangular bases.
+Step 4: # Answer
+
+5
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+Step 4: No
+""".format(output_format=output_format.format(hallucination='Fabrication'))
+
+demonstration_factual_inconsistency = """[Question]
+Emily has 6 marbles. Megan gives Emily double the number she has. Emily then gives Megan back half of her new total plus 1. How many marbles does Emily have now?
+
+[Reasoning Steps]
+Step 1: Megan gives Emily 6*2=12 marbles.
+Step 2: Emily then has 6+12=18 marbles.
+Step 3: Emily gives Megan back half of her new total minus 3, which is (18/2) - 3 = 6 marbles, leaving Emily with 18 - 6 = 12 marbles.
+Step 4: Emily has 18-10=8 marbles now.
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+Step 4: No
+
+[Question]
+The area of one lateral face of a right pyramid with an equilateral triangular base is 75 square meters. If the slant height is 30 meters, what is the length of the side of its base, in meters?
+
+[Reasoning Steps]
+Step 1: I know that the area of a triangular face of a pyramid is half the product of the base and the slant height.
+Step 2: So, if the area is 75 square meters and the slant height is 30 meters, then the base must be 75 divided by half of 30, which is 5 meters.
+Step 3: Since the area of a triangular face is one-third the product of the base and height, I can set up the equation as 75 = (1/3)bh, where b is the base and h is the slant height, and then solve for b.
+Step 4: # Answer
+
+5
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+Step 4: No
+""".format(output_format=output_format.format(hallucination='Factual Inconsistency'))
+
+demonstration_context_inconsistency = """[Question]
+To make pizza, together with other ingredients, Kimber needs 10 cups of water, 16 cups of flour, and 1/2 times as many teaspoons of salt as the number of cups of flour. Calculate the combined total number of cups of water, flour, and teaspoons of salt that she needs to make the pizza.
+
+[Reasoning Steps]
+Step 1: To make the pizza, Kimber half as many teaspoons of salt as the number of cups of flour, meaning she needs 1/2*16 = 8 teaspoons of salt.
+Step 2: Since Kimber needs 1/4 times as many teaspoons of salt as the number of cups of flour, she needs 1/4*16 = 4 teaspoons of salt.
+Step 3: She also needs 10 cups of water, which means the total number of cups of water and flour and teaspoons of salt she needs is 24+10 = 34
+
+{output_format}
+
+Step 1: No
+Step 2: Yes
+Step 3: No
+
+[Question]
+It takes 24 minutes for Jana to walk one mile. At that rate, how far in miles will she walk in 10 minutes? Express your answer as a decimal to the nearest tenth.
+
+[Correct Reasoning Steps]
+Step 1: So Jana walks one mile in 24 minutes. That means she walks 1/24 of a mile in one minute.
+Step 2: In 10 minutes, she will walk 10 * 1/24 = 10/24 = 5/12 of a mile.
+Step 3: Since Jana walks 1.5 miles in 24 minutes, she walks 1.5/24 of a mile in one minute. In 10 minutes, she will walk 10 * 1.5/24 = 10/16 = 5/8 of a mile.
+Step 4: So Jana walks about 0.4 miles in 10 minutes. # Answer
+
+0.4
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+Step 4: No
+""".format(output_format=output_format.format(hallucination='Context Inconsistency'))
+
+
+demonstration_instruction_inconsistency = """[Question]
+Rachel and Sara want to attend a beauty and modeling contest. They both want to buy new pairs of shoes and dresses. Sara buys a pair of shoes which costs $50 and a dress which costs $200. How much should Rachel budget if she wants to spend twice as much as what Sara spent on the pair of shoes and dress?
+
+[Reasoning Steps]
+Step 1: The cost Rachel should budget for her pair of shoes is $50 * 2 = $100.
+Step 2: The cost Rachel should budget for her dress is $200 * 2 = $400.
+Step 3: To find the average cost of Rachel's shoes and dress, we can add the cost of shoes and dress and divide by 2: ($100 + $400) / 2 = $250.
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+
+[Question]
+Two distinct primes, each greater than 20, are multiplied. What is the least possible product of these two primes?
+
+[Reasoning Steps]
+Step 1: I know that the primes greater than 20 are 23, 29, 31, 37, and so on.
+Step 2: To get the least possible product, I want to multiply the two smallest primes in this list, which are 23 and 29.
+Step 3: To find the least possible sum of these two primes, I add 23 and 29: 23 + 29 = 52.
+Step 4: # Answer
+
+667
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+Step 4: No
+""".format(output_format=output_format.format(hallucination='Instruction Inconsistency'))
+
+demonstration_logical_inconsistency = """
+[Question]
+Shawna's workout goal is 30 situps. On Monday, Shawna was only able to do 12 situps, so she decided that she would make up for the rest on Tuesday. However, she was only able to do 19 situps on Tuesday. How many situps would Shawna have to do on Wednesday to meet her minimum goal and make up for the ones she didn't do?
+
+[Reasoning Steps]
+Step 1: On Monday, Shawna was short of 30 - 12 = 18 situps
+Step 2: Since Shawna did 20 situps on Tuesday, she is still short of 30 - 20 = 10 situps, so she needs to do 10 more situps on Wednesday.
+Step 3: On Wednesday, Shawna would have to do 30 + 18 + 11 = 59 situps
+
+{output_format}
+
+Step 1: No
+Step 2: Yes
+Step 3: No
+
+[Question]
+Suppose $p$ and $q$ are inversely proportional. If $p=28$ when $q=7$, find the value of $p$ when $q=49$.
+
+[Reasoning Steps]
+Step 1: I know that inversely proportional means that the product of $p$ and $q$ is constant, so I can write an equation: $pq=k$.
+Step 2: I can use the given values of $p$ and $q$ to find $k$: $28\cdot 7=k$, so $k=196$.
+Step 3: Since $pq=k$ and $k=392$, when $q=49$, $p$ is equal to $392/24=16.33$.
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+""".format(output_format=output_format.format(hallucination='Logical Inconsistency'))
+
+demonstration_calculation_error = """
+[Question]
+Shawna's workout goal is 30 situps. On Monday, Shawna was only able to do 12 situps, so she decided that she would make up for the rest on Tuesday. However, she was only able to do 19 situps on Tuesday. How many situps would Shawna have to do on Wednesday to meet her minimum goal and make up for the ones she didn't do?
+
+[Reasoning Steps]
+Step 1: On Monday, Shawna was short of 30 - 12 = 18 situps
+Step 2: On Tuesday, she was short of 11 situps, so add the number of situps she was short on Monday and Tuesday: 18 + 19 = 42 situps.
+Step 3: On Wednesday, Shawna would have to do 30 + 18 + 11 = 59 situps
+
+{output_format}
+
+Step 1: No
+Step 2: Yes
+Step 3: No
+
+[Question]
+Suppose $p$ and $q$ are inversely proportional. If $p=28$ when $q=7$, find the value of $p$ when $q=49$.
+
+[Reasoning Steps]
+Step 1: I know that inversely proportional means that the product of $p$ and $q$ is constant, so I can write an equation: $pq=k$.
+Step 2: I can use the given values of $p$ and $q$ to find $k$: $28\cdot 7=k$, so $k=196$.
+Step 3: Now, divide $k$ by $q$ to find $p$: $196 \div 49 = 402$, so $p = 402$ when $q = 49$.
+
+{output_format}
+
+Step 1: No
+Step 2: No
+Step 3: Yes
+""".format(output_format=output_format.format(hallucination='Calculation Error'))
+
+demonstrations = {
+    'Fabrication': demonstration_fabrication,
+    'Factual-Inconsistency': demonstration_factual_inconsistency,
+    'Context-Inconsistency': demonstration_context_inconsistency,
+    'Logical-Inconsistency': demonstration_logical_inconsistency,
+    'Instruction-Inconsistency': demonstration_instruction_inconsistency,
+    'Calculation-Error': demonstration_calculation_error,
+}
+
+fabrication_definition = ('[Fabrication Hallucination Definition]\n'
+'A step with fabrication hallucination includes facts that are unverifiable '
+'against established real-world knowledge or context information. '
+'These fabrications are plausible within the context but can not '
+'be verifiable through any external sources. Such as:\n'
+'- Unverifiable Facts: Introduces facts that cannot be verified through '
+'established real-world knowledge. For example, mention a historical event '
+'that did not happen, or a scientific theory that does not exist.\n'
+'- Fictitious Entities: Refer to people, places, or organizations that are '
+'entirely made up. For example, mention a "Dr. John Smith of the International '
+'Institute of Quantum Studies," which does not exist.\n'
+'- Imaginary Data or Statistics: Provide data or statistics that are fictional. '
+'For example, state that "according to a 2023 study by the Global Health '
+'Organization, 75% of people prefer digital books over physical ones," when no '
+'such study exists.\n'
+)
+
+factual_inconsistency_definition = ('[Factual Inconsistency Hallucination Definition]\n'
+'A step with factual inconsistency includes facts that can be grounded in '
+'real-world information but present contradictions. These inconsistencies '
+'are subtle and can not be immediately obvious. Such as:\n'
+'- Contradict Known Facts: Introduce information that contradicts widely '
+'accepted and verifiable facts. For example, state that "The Eiffel Tower '
+'is located in Berlin," contradicting the well-known fact that it is in Paris.\n'
+'- Inconsistent Historical Events: Reference historical events with incorrect '
+'dates or details. For example, mention that "The American Civil War ended in 1870," '
+'when it actually ended in 1865.\n'
+'- Conflicting Data or Statistics: Provide data or statistics that conflict '
+'with established information. For example, state that "According to the '
+'2020 census, the population of New York City is 2 million," when the actual '
+'population is significantly higher.'
+)
+
+context_inconsistency_definition = ('[Context Inconsistency Hallucination Definition]\n'
+'A step with context inconsistency includes information contradicting to the '
+'provided contextual information. These context inconsistencies are '
+'subtle but clear enough to be identified. Such as:\n'
+'- Contradict Provided Facts: Introduce information that directly contradicts '
+'the facts given in the input question. For example, if the input states that '
+'"Bob was born in England," the step may contradict it by stating that '
+'"Bob was born in France."\n'
+'- Alter Specific Details or Data: Change specific details or data provided by '
+'the input. For example, if the input mentions that "Bob has three books and two '
+'pens in his backpack," the step might alter it by stating that "Bob has two books '
+'and four pens in his backpack."\n'
+'- Misattribute Quotes or Data: Attribute quotes or data to the wrong source. '
+'For example, if the input states that "Bob likes apples while Jane likes bananas." '
+'the step might contradict it by stating "Jane likes apples" or "Bob likes bananas".'
+)
+
+logical_inconsistency_definition = ('[Logical Inconsistency Hallucination Definition]\n'
+'A step with logical inconsistency incorrectly refers to or copies content from '
+'previous reasoning steps. These logical inconsistencies are subtle but clear '
+'enough to be identified. Such as:\n'
+'- Incorrect Reference: Refer to a previous reasoning step incorrectly, '
+'such as misinterpreting or misrepresenting the calculations or conclusions. '
+'For example, if a previous step states "Bob is an undergraduate," the step may '
+'incorrectly refer back to this by stating "Since Bob is a graduate..."\n'
+'- Copying Errors: Copy content from a previous reasoning step but alter it '
+'in a way that introduces an error, such as changing numbers or relationships. '
+'For example, if the previous reasoning involves steps for calculating a total cost and '
+'one step states "Item A costs 5 * $2 = $10," the step might incorrectly copy this '
+'as "Since item A costs 5 * $3 = $15..." in the next step.\n'
+'- Make logical leaps or conclusions that do not follow from the previous steps, '
+'leading to an incorrect answer.'
+)
+
+instruction_inconsistency_definition = ('[Instruction Inconsistency Hallucination Definition]\n'
+'A step with instruction inconsistency introduces inconsistencies by not aligning '
+'the output with the specific instructions given by the input. These instruction '
+'inconsistencies are subtle but clear enough to be identified. Such as:\n'
+'- Ignore Specific Instructions: Generate text that contradicts or disregards '
+'explicit instructions given in the prompt. For example, if asked to list '
+'developed countries in Europe, list all developed countries in the world.\n'
+'- Alter the Requested Target: Change the target requested by the input. '
+'For example, if asked to list developed countries in the world, list all '
+'undeveloped countries in the world instead.\n'
+'- Misinterpret the Instructions: Deliberately misinterpret the instruciton '
+'so that the output does not respond directly to the input\'s request. '
+'For example, if asked for "Japan\'s capital city", answer "Japan\'s largest '
+'city is Tokyo", even though Tokyo is the capital city in Japan.'
+)
+
+calculation_error_definition = ('[Calculation Error Hallucination Definition]\n'
+'A step with calculation error introduces calculation error by including '
+'incorrect numerical calculations or data processing. These errors are subtle '
+'but clear enough to be identified. Such as:\n'
+'- Perform Erroneous Mathematical Calculations: Make intentional mistakes '
+'in mathematical calculations. For example, state that "The sum of 45 and 15 '
+'is 70", when it is actually 60.'
+'- Include Incorrect Data Processing: Misapply mathematical principles, '
+'laws of physics, or other data processing operations. For example, when asked '
+'to calculate the area of a circular, compute the perimeter formula 2*Pi*radius '
+'instead of the area formula Pi*radius^2.'
+'- Generates responses with unsupported claims, including numerical assertions '
+'that have no basis in the provided context or input.'
+)
+
+definitions = {
+    'Fabrication': fabrication_definition,
+    'Factual-Inconsistency': factual_inconsistency_definition,
+    'Context-Inconsistency': context_inconsistency_definition,
+    'Logical-Inconsistency': logical_inconsistency_definition,
+    'Instruction-Inconsistency': instruction_inconsistency_definition,
+    'Calculation-Error': calculation_error_definition,
+}
+
+hallucinations = [
+    'Context Inconsistency',
+    'Logical Inconsistency',
+    'Instruction Inconsistency',
+    'Logical Error',
+    'Factual Inconsistency',
+    'Fabrication',
+]
+
+def convert(line):
+    question = line['problem']
+
+    data = {}
+    for hallucination in hallucinations:
+        if pd.isna(line[hallucination]):
+            continue
+        data[hallucination] = {'question': question, 'solution': line[hallucination], 'inject_step': line[hallucination+'-Wrong step']}
+
+    return data
+
+responses = data.apply(convert, axis=1)
+
+def extract_results(prompts, responses):
+    data = []
+    for prompt, response in zip(prompts, responses):
+        new_data = {'prompt': prompt, 'response': response}
+
+        match = re.search('(?s:.*)(step 1:)( )+(yes|no)', response, re.I)
+        if match is not None:
+            span = match.span(1)
+            response = response[span[-1]-7:].strip()
+
+        response = [r.strip() for r in response.split('\n') if '' != r]
+        flags = []
+        for step in response:
+            match = re.search(r'Step (\d): (Yes|No)', step)
+            if match is not None: 
+                idx = int(match.group(1))
+                content = match.group(2)
+                flag = 1 if 'Yes'==content else 0
+                if len(flags) >= idx:
+                    flags[idx-1] = flag
+                else:
+                    flags.append(flag)
+        new_data['flags'] = flags
+        data.append(new_data)
+
+    return data
+
+def calculate_f1_scores(data, results):
+    precision_scores, recall_scores, f1_scores = [], [], []
+    for d, r in zip(data, results):
+        golden = [0] * (len(d['solution'].split('Step'))-1)
+        golden[int(d['inject_step'])-1] = 1
+
+        flags = r['flags']
+
+        if len(golden) != len(flags):
+            flags = flags[:len(golden)]
+        if len(golden) > len(flags):
+            flags += [0] * (len(golden)-len(flags))
+
+        precision, recall, fscore, _ = precision_recall_fscore_support(golden, flags, average='binary')
+        precision_scores.append(precision)
+        recall_scores.append(recall)
+        f1_scores.append(fscore)
+
+    return fmean(precision_scores), fmean(recall_scores), fmean(f1_scores)
+
+data = {}
+for res in responses:
+    for k, v in res.items():
+        if k not in data:
+            data[k] = []
+        data[k].append(v)
+
+file_name = '../data/human/human_{hallucination}.json'
+for hallucination in hallucinations:
+    if 'Logical Error' == hallucination:
+        hallucination_name = 'Calculation-Error'
+    else:
+        hallucination_name = hallucination.replace(' ', '-')
+
+    print(hallucination, len(data[hallucination]))
+    with open(file_name.format(hallucination=hallucination), 'w') as f:
+        for d in data[hallucination]:
+            f.write(json.dumps(d)+'\n')
+
+    prompts = []
+    for d in data[hallucination]:
+        question = 'Question: ' + d['question']
+        rs = d['solution']
+        prompt = (
+            f"{definitions[hallucination_name]}\n\n"
+            f"{demonstrations[hallucination_name]}\n\n"
+            '[Question]\n'
+            f'{question}\n\n'
+            '[Reasoning Steps]\n'
+            f'{rs}\n\n'
+            f"{output_format.format(hallucination=hallucination_name)}\n"
+        )
+        prompts.append((prompt, rs))
+
+    # prm_model
+    responses = reward_model.run_rm(prompts, hallucination_name)
+
+    # claude
+#    import utils.anthropic_api as anthropic_api
+#    responses = []
+#    for prompt in tqdm(prompts):
+#        messages = [{'role': 'user', 'content': prompt}]
+#        response = anthropic_api.call(messages, max_tokens=1700)
+#        responses.append(response)
+
+    # gpt-3.5
+#    import utils.openai_api as openai_api
+#    responses = []
+#    for prompt in tqdm(prompts):
+#        response = openai_api.call(prompt, max_tokens=1700)
+#        responses.append(response)
+
+    results = extract_results(prompts, responses)
+
+    precision, recall, f1_score = calculate_f1_scores(data[hallucination], results)
+    print(hallucination, 'precision:', precision)
+    print(hallucination, 'recall:', recall)
+    print(hallucination, 'f1:', f1_score)
+
