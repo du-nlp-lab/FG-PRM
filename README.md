@@ -5,7 +5,7 @@
   <a href="https://huggingface.co/du-lab">Data</a>
 </p>
 
-The repo is built based on the verl GitHub repo.
+The repo is built based on the [FineGrainedRLHF GitHub repo](https://github.com/allenai/FineGrainedRLHF).
 
 ## Getting Started
 To set up an environment, please follow the following commands:
